@@ -25,7 +25,7 @@ export function renderDataUpload(
       <td class="font-mono">${r.capacity.toLocaleString()}</td>
       <td class="font-mono">${r.current_crowd.toLocaleString()}</td>
       <td class="font-mono text-critical">+${r.inflow_per_min.toLocaleString()}</td>
-      <td class="font-mono text-low">-${r.outflow_per_min.toLocaleString()}</td>
+      <td class="font-mono text-low">${r.outflow_per_min.toLocaleString()}</td>
       <td class="font-mono">${r.queue_size.toLocaleString()}</td>
       <td class="font-mono">${r.transport_capacity.toLocaleString()}</td>
       <td class="font-mono">${r.next_transport_minutes}m</td>

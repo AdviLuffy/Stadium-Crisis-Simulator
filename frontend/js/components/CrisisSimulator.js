@@ -77,7 +77,7 @@ export function renderCrisisSimulator(
             <span class="val">${scen.projected_occupancy_percent}%</span>
           </div>
           <div class="scen-metric-item">
-            <span style="color: var(--text-secondary);">Exterior Queue Drainage</span>
+            <span style="color: var(--text-secondary);">Projected Queue (2 min)</span>
             <span class="val">${scen.projected_queue.toLocaleString()}</span>
           </div>
         </div>
