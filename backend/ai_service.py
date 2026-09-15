@@ -1,7 +1,9 @@
 import os
+import re
 import json
+import time
 import logging
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 
 from backend.models import (
@@ -14,6 +16,17 @@ from backend.models import (
 load_dotenv()
 
 logger = logging.getLogger("stadium_crisis.ai_service")
+
+# Model Fallback Chain for transient 503 / UNAVAILABLE errors
+MODEL_FALLBACK_CHAIN: List[str] = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+]
+
+MAX_RETRIES_PER_MODEL: int = 1
+RETRY_BACKOFF_SECONDS: float = 0.5
 
 SYSTEM_INSTRUCTION = """You are a stadium safety and operations decision-support engine.
 
@@ -38,6 +51,113 @@ Return structured JSON conforming to:
 }"""
 
 
+def sanitize_error_message(msg: str, api_key: Optional[str] = None) -> str:
+    """Removes API keys and secrets from error strings before logging or displaying."""
+    if not msg:
+        return ""
+    sanitized = str(msg)
+    if api_key and api_key in sanitized:
+        sanitized = sanitized.replace(api_key, "[REDACTED_API_KEY]")
+    # Also redact standard Gemini/Google API key patterns (AIzaSy...)
+    sanitized = re.sub(r"AIzaSy[A-Za-z0-9_-]{33}", "[REDACTED_API_KEY]", sanitized)
+    return sanitized
+
+
+def is_transient_error(exc: Exception) -> bool:
+    """
+    Determines whether an exception represents a temporary service unavailability (503/429/UNAVAILABLE)
+    that warrants a limited retry or model fallback.
+    """
+    code = getattr(exc, "code", None)
+    if code in (503, 429):
+        return True
+
+    status = getattr(exc, "status", None)
+    if status in ("UNAVAILABLE", "RESOURCE_EXHAUSTED"):
+        return True
+
+    err_str = str(exc).upper()
+    transient_indicators = [
+        "503",
+        "UNAVAILABLE",
+        "HIGH DEMAND",
+        "OVERLOADED",
+        "TEMPORARILY UNAVAILABLE",
+        "TRY AGAIN LATER",
+        "SPIKES IN DEMAND",
+        "RESOURCE_EXHAUSTED",
+        "429",
+    ]
+    return any(ind in err_str for ind in transient_indicators)
+
+
+def is_non_transient_error(exc: Exception) -> bool:
+    """
+    Identifies non-transient errors (invalid auth, permission denied, bad request)
+    where retrying would be wasteful.
+    """
+    code = getattr(exc, "code", None)
+    if code in (400, 401, 403, 404):
+        return True
+
+    status = getattr(exc, "status", None)
+    if status in ("INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED", "NOT_FOUND"):
+        return True
+
+    err_str = str(exc).upper()
+    non_transient_indicators = [
+        "API_KEY_INVALID",
+        "PERMISSION_DENIED",
+        "UNAUTHENTICATED",
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "401",
+        "403",
+        "400",
+    ]
+    return any(ind in err_str for ind in non_transient_indicators)
+
+
+def parse_and_validate_gemini_json(text: str) -> Dict[str, Any]:
+    """
+    Safely parses and validates structured JSON output from Gemini.
+    Raises ValueError if JSON is malformed or required schema fields are missing.
+    """
+    if not text or not text.strip():
+        raise ValueError("Gemini returned empty response text.")
+
+    cleaned = text.strip()
+    # Strip markdown fences if present
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    data = json.loads(cleaned)
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+
+    required_fields = [
+        "risk",
+        "eta_minutes",
+        "recommended_action",
+        "reason",
+        "alternatives_considered",
+        "confidence",
+    ]
+    missing = [f for f in required_fields if f not in data]
+    if missing:
+        raise ValueError(f"Missing required schema fields in Gemini response: {missing}")
+
+    if not isinstance(data["alternatives_considered"], list):
+        raise ValueError("Field 'alternatives_considered' must be a list.")
+
+    return data
+
+
 def get_deterministic_fallback_recommendation(
     risk_eval: RiskEvaluation,
     comparison: ScenarioComparisonResponse,
@@ -54,11 +174,8 @@ def get_deterministic_fallback_recommendation(
     # Filter feasible scenarios
     feasible = [s for s in scenarios if s.is_feasible]
 
-    # Find the scenario that minimizes projected risk score and projected net flow
-    # Prefer negative net flow (clearing the zone)
     best_scenario = None
     if feasible:
-        # Sort by: 1. Risk level (LOW > MEDIUM > HIGH > CRITICAL), 2. projected net flow asc, 3. projected queue asc
         best_scenario = min(
             feasible,
             key=lambda s: (s.projected_risk_score, s.projected_net_flow, s.projected_queue)
@@ -76,6 +193,7 @@ def get_deterministic_fallback_recommendation(
             confidence=0.75,
             is_fallback=True,
             fallback_notice=fallback_reason,
+            model_used=None,
         )
 
     alternatives = [
@@ -84,7 +202,6 @@ def get_deterministic_fallback_recommendation(
         if s.scenario_id != best_scenario.scenario_id
     ]
 
-    # Generate grounded reasoning
     if best_scenario.projected_net_flow <= 0:
         flow_status = f"reverses crowd accumulation to a negative net flow ({best_scenario.projected_net_flow:+d} people/min)"
     else:
@@ -107,6 +224,7 @@ def get_deterministic_fallback_recommendation(
         confidence=0.95,
         is_fallback=True,
         fallback_notice=fallback_reason,
+        model_used=None,
     )
 
 
@@ -115,8 +233,10 @@ def generate_ai_recommendation(
     comparison: ScenarioComparisonResponse,
 ) -> AiRecommendation:
     """
-    Evaluates validated operational data and simulated intervention outcomes using Gemini 3.8 Flash,
-    falling back transparently to the deterministic engine if API key is missing or unavailable.
+    Evaluates validated operational data and simulated intervention outcomes using Gemini API.
+    Implements a resilient model fallback chain (gemini-3.8-flash -> 3.7 -> 3.6 -> 3.5)
+    with short backoff for transient 503 errors, safe non-transient handling, and clean
+    deterministic fallback.
     """
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
 
@@ -181,7 +301,11 @@ def generate_ai_recommendation(
             ],
         }
 
-        user_prompt = f"Operational Data and Simulation Outcomes:\n{json.dumps(payload, indent=2)}\n\nReason over these facts and return your recommendation in JSON."
+        user_prompt = (
+            f"Operational Data and Simulation Outcomes:\n"
+            f"{json.dumps(payload, indent=2)}\n\n"
+            f"Reason over these operational facts and return your recommendation in structured JSON."
+        )
 
         config = types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
@@ -189,32 +313,94 @@ def generate_ai_recommendation(
             temperature=0.2,
         )
 
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=user_prompt,
-            config=config,
+        last_transient_error = None
+
+        # Iterate through model fallback chain
+        for model_name in MODEL_FALLBACK_CHAIN:
+            for attempt in range(MAX_RETRIES_PER_MODEL + 1):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=user_prompt,
+                        config=config,
+                    )
+
+                    if not response or not response.text:
+                        raise ValueError("Empty response received from Gemini API.")
+
+                    raw_json = parse_and_validate_gemini_json(response.text)
+
+                    # Successful structured reasoning
+                    return AiRecommendation(
+                        risk=str(raw_json["risk"]),
+                        eta_minutes=float(raw_json["eta_minutes"]),
+                        recommended_action=str(raw_json["recommended_action"]),
+                        reason=str(raw_json["reason"]),
+                        alternatives_considered=[str(a) for a in raw_json["alternatives_considered"]],
+                        confidence=float(raw_json["confidence"]),
+                        is_fallback=False,
+                        fallback_notice=None,
+                        model_used=model_name,
+                    )
+
+                except Exception as exc:
+                    safe_err = sanitize_error_message(str(exc), api_key)
+
+                    # 1. Non-transient errors (400, 401, 403, malformed output schema)
+                    if is_non_transient_error(exc) or isinstance(exc, (json.JSONDecodeError, ValueError)):
+                        logger.warning(
+                            f"Non-transient error from Gemini on {model_name}: {type(exc).__name__} - {safe_err}. "
+                            "Aborting model chain to avoid wasted retries."
+                        )
+                        return get_deterministic_fallback_recommendation(
+                            risk_eval,
+                            comparison,
+                            fallback_reason=f"Gemini API error ({type(exc).__name__}). Deterministic Safety Fallback Engine active.",
+                        )
+
+                    # 2. Transient errors (503 / UNAVAILABLE / high demand)
+                    if is_transient_error(exc):
+                        last_transient_error = safe_err
+                        logger.warning(
+                            f"Gemini model {model_name} transient error (attempt {attempt + 1}/{MAX_RETRIES_PER_MODEL + 1}): {safe_err}"
+                        )
+                        if attempt < MAX_RETRIES_PER_MODEL:
+                            time.sleep(RETRY_BACKOFF_SECONDS)
+                            continue
+                        else:
+                            # Move to next model in fallback chain
+                            logger.info(
+                                f"Model {model_name} unavailable after {MAX_RETRIES_PER_MODEL + 1} attempts. Falling back to next model in chain."
+                            )
+                            break
+                    else:
+                        # Unknown unexpected error
+                        logger.warning(
+                            f"Unexpected error from Gemini on {model_name}: {type(exc).__name__} - {safe_err}. "
+                            "Switching to deterministic safety engine."
+                        )
+                        return get_deterministic_fallback_recommendation(
+                            risk_eval,
+                            comparison,
+                            fallback_reason=f"Gemini API unavailable ({type(exc).__name__}). Deterministic Safety Fallback Engine active.",
+                        )
+
+        # All models in fallback chain exhausted
+        logger.error(
+            f"All models in fallback chain ({MODEL_FALLBACK_CHAIN}) exhausted due to transient unavailability. "
+            f"Last error: {last_transient_error}"
         )
-
-        if not response or not response.text:
-            raise ValueError("Empty response received from Gemini API.")
-
-        raw_json = json.loads(response.text.strip())
-
-        return AiRecommendation(
-            risk=str(raw_json.get("risk", f"High congestion alert at {risk_eval.zone}")),
-            eta_minutes=float(raw_json.get("eta_minutes", risk_eval.time_to_capacity_minutes or 0.0)),
-            recommended_action=str(raw_json.get("recommended_action", "Deploy combined interventions")),
-            reason=str(raw_json.get("reason", "Evaluated from simulated scenarios.")),
-            alternatives_considered=list(raw_json.get("alternatives_considered", [])),
-            confidence=float(raw_json.get("confidence", 0.9)),
-            is_fallback=False,
-            fallback_notice=None,
-        )
-
-    except Exception as e:
-        logger.warning(f"Gemini API call failed: {e}. Falling back to deterministic engine.")
         return get_deterministic_fallback_recommendation(
             risk_eval,
             comparison,
-            fallback_reason=f"Gemini API unavailable ({type(e).__name__}). Deterministic Safety Fallback Engine active.",
+            fallback_reason="All Gemini models currently experiencing high demand (503 UNAVAILABLE). Deterministic Safety Fallback Engine active.",
+        )
+
+    except Exception as e:
+        safe_top_err = sanitize_error_message(str(e), api_key)
+        logger.error(f"Top-level Gemini execution failed: {type(e).__name__} - {safe_top_err}. Using deterministic fallback.")
+        return get_deterministic_fallback_recommendation(
+            risk_eval,
+            comparison,
+            fallback_reason=f"Gemini service unavailable ({type(e).__name__}). Deterministic Safety Fallback Engine active.",
         )

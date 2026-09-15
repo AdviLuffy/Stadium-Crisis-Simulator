@@ -155,7 +155,7 @@ export function renderDashboard(container, state, onSelectZone, onNavigate) {
     aiCardContent = `
       <div class="ai-meta-bar">
         <div class="ai-badge">
-          <span>🧠</span> ${isFallback ? 'Deterministic Safety Engine' : 'Gemini 3.8 Flash Decision Engine'}
+          <span>🧠</span> ${isFallback ? 'Deterministic Safety Engine' : (recommendation.model_used ? `Gemini Live Engine (${recommendation.model_used})` : 'Gemini 3.8 Flash Decision Engine')}
         </div>
         <div class="ai-confidence">
           Confidence: <strong>${Math.round(recommendation.confidence * 100)}%</strong>

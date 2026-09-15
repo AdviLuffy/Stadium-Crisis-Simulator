@@ -168,7 +168,10 @@ def test_ai_fallback():
     )
     risk_eval = evaluate_zone_risk(gate_c_record)
     comp = generate_standard_comparison(gate_c_record)
-    rec = generate_ai_recommendation(risk_eval, comp)
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
+        rec = generate_ai_recommendation(risk_eval, comp)
 
     assert rec.is_fallback, "Should be fallback without GEMINI_API_KEY"
     assert rec.eta_minutes == 1.78

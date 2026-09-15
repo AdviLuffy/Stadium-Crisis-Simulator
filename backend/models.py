@@ -99,3 +99,5 @@ class AiRecommendation(BaseModel):
     confidence: float
     is_fallback: bool = False
     fallback_notice: Optional[str] = None
+    model_used: Optional[str] = None
+
