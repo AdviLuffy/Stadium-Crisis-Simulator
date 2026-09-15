@@ -1,0 +1,4 @@
+timestamp,zone,capacity,current_crowd,inflow_per_min,outflow_per_min,queue_size,transport_capacity,next_transport_minutes,available_shuttles,gate_d_available
+19:05:00,Gate X,-5000,100,500,200,300,500,5,2,true
+19:05:00,Gate Y,5000,6000,500,200,300,500,5,2,true
+19:05:00,Gate Z,5000,3000,-100,200,300,500,-2,-1,maybe

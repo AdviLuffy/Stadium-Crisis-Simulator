@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stadium Crisis Simulator — Real-Time Tactical Decision Support</title>
+  <meta name="description" content="AI-powered crowd bottleneck prediction and tactical what-if simulator for stadium operations." />
+  
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet" />
+  
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+  <!-- Top Navigation Header -->
+  <div id="navbar-mount"></div>
+
+  <!-- Main View Containers -->
+  <main class="main-wrapper">
+    <!-- View 1: Operations Dashboard -->
+    <section id="view-dashboard" class="view-container active"></section>
+
+    <!-- View 2: What-If Crisis Simulator -->
+    <section id="view-simulator" class="view-container"></section>
+
+    <!-- View 3: Data Ingestion & Validation -->
+    <section id="view-upload" class="view-container"></section>
+  </main>
+
+  <!-- ES Module Application Bootstrap -->
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
