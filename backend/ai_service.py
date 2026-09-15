@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import math
 import logging
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -30,22 +31,32 @@ RETRY_BACKOFF_SECONDS: float = 0.5
 
 SYSTEM_INSTRUCTION = """You are a stadium safety and operations decision-support engine.
 
-Given validated stadium operational data and simulated intervention outcomes:
-1. Identify the most urgent risk.
-2. Determine the likely consequence if no action is taken.
-3. Evaluate feasible interventions.
-4. Respect all resource constraints.
-5. Compare projected outcomes.
-6. Select ONE recommended intervention.
-7. Explain why it is preferable to alternatives.
-8. Never invent unavailable resources or numerical results.
+CORE PRINCIPLES & NUMERICAL GROUNDING RULES:
+1. Deterministic application calculations are authoritative.
+2. Treat all supplied operational metrics and simulated scenario results as immutable facts.
+3. NEVER recalculate, estimate, derive, reinterpret, or modify numerical values.
+4. NEVER invent numerical values or hallucinate different flows, queues, occupancies, or times.
+5. When mentioning a scenario's numerical result, copy the supplied value EXACTLY.
+6. Do not infer a new queue size, occupancy, net flow, TTC, resource count, or capacity.
+7. If a numerical value is not supplied, do not provide or assume one.
+8. Gemini is the reasoning and explanation layer, NOT the calculator. Use the provided calculations directly.
+9. Compare scenarios using the supplied simulation results only.
+
+TASKS:
+1. Identify the most urgent risk based strictly on current operational state.
+2. Determine the likely consequence if no action is taken (baseline outcome).
+3. Evaluate feasible interventions and respect all resource constraints.
+4. Compare projected scenario outcomes using their authoritative simulation metrics.
+5. Select ONE recommended intervention.
+6. Explain why it is preferable to alternatives using exact simulation numbers without modification.
+7. Never invent unavailable resources or modify numerical results.
 
 Return structured JSON conforming to:
 {
-  "risk": "string (summary of the primary risk)",
-  "eta_minutes": number (estimated minutes until critical condition),
-  "recommended_action": "string (concise intervention title)",
-  "reason": "string (detailed tactical reasoning explaining why this option was chosen over alternatives)",
+  "risk": "string (summary of the primary risk based on operational state)",
+  "eta_minutes": number (estimated minutes until critical condition matching authoritative operational time_to_capacity_minutes),
+  "recommended_action": "string (concise intervention title matching one of the feasible scenarios)",
+  "reason": "string (detailed tactical reasoning explaining why this option was chosen over alternatives, copying exact numerical metrics from the simulation outcomes without alteration)",
   "alternatives_considered": ["string (alternative 1)", "string (alternative 2)"],
   "confidence": number (between 0.0 and 1.0)
 }"""
@@ -155,6 +166,12 @@ def parse_and_validate_gemini_json(text: str) -> Dict[str, Any]:
     if not isinstance(data["alternatives_considered"], list):
         raise ValueError("Field 'alternatives_considered' must be a list.")
 
+    if data.get("eta_minutes") is None:
+        raise ValueError("Field 'eta_minutes' must not be null/None in Gemini response.")
+
+    if data.get("confidence") is None:
+        raise ValueError("Field 'confidence' must not be null/None in Gemini response.")
+
     return data
 
 
@@ -254,8 +271,9 @@ def generate_ai_recommendation(
 
         client = genai.Client(api_key=api_key)
 
-        # Build prompt payload with validated facts only
+        # Build prompt payload with validated facts only - explicitly marked authoritative
         payload = {
+            "notice": "ALL NUMERICAL VALUES ARE PRE-CALCULATED AND AUTHORITATIVE. DO NOT MODIFY, RECALCULATE, OR INVENT NUMBERS.",
             "operational_state": {
                 "zone": risk_eval.zone,
                 "timestamp": risk_eval.timestamp,
@@ -272,29 +290,33 @@ def generate_ai_recommendation(
                 "next_transport_minutes": risk_eval.raw_record.next_transport_minutes,
                 "available_shuttles": risk_eval.raw_record.available_shuttles,
                 "gate_d_available": risk_eval.raw_record.gate_d_available,
-                "risk_level": risk_eval.risk_level.value,
+                "risk": risk_eval.risk_level.value,
             },
-            "baseline_outcome": {
-                "projected_net_flow": comparison.baseline.projected_net_flow,
-                "projected_time_to_capacity_minutes": comparison.baseline.projected_time_to_capacity_minutes,
-                "projected_risk_level": comparison.baseline.projected_risk_level.value,
+            "baseline_do_nothing_outcome": {
+                "scenario_name": comparison.baseline.scenario_name,
+                "intervention": "No Action (Status Quo)",
+                "net_flow_per_min": comparison.baseline.projected_net_flow,
+                "time_to_capacity_minutes": comparison.baseline.projected_time_to_capacity_minutes,
+                "projected_occupancy_percent": comparison.baseline.projected_occupancy_percent,
                 "projected_queue": comparison.baseline.projected_queue,
+                "risk": comparison.baseline.projected_risk_level.value,
+                "resource_usage": "None",
             },
-            "simulated_scenarios": [
+            "authoritative_simulated_scenarios": [
                 {
                     "scenario_id": s.scenario_id,
                     "scenario_name": s.scenario_name,
-                    "description": s.description,
+                    "intervention": s.description,
                     "is_feasible": s.is_feasible,
                     "feasibility_error": s.feasibility_error,
-                    "projected_inflow": s.projected_inflow,
-                    "projected_outflow": s.projected_outflow,
-                    "projected_net_flow": s.projected_net_flow,
+                    "inflow_per_min": s.projected_inflow,
+                    "outflow_per_min": s.projected_outflow,
+                    "net_flow_per_min": s.projected_net_flow,
+                    "time_to_capacity_minutes": s.projected_time_to_capacity_minutes,
                     "projected_occupancy_percent": s.projected_occupancy_percent,
                     "projected_queue": s.projected_queue,
-                    "projected_time_to_capacity_minutes": s.projected_time_to_capacity_minutes,
-                    "projected_risk_level": s.projected_risk_level.value,
-                    "resources_consumed": s.resources_consumed,
+                    "risk": s.projected_risk_level.value,
+                    "resource_usage": s.resources_consumed,
                     "resources_remaining": s.resources_remaining,
                 }
                 for s in comparison.scenarios
@@ -302,9 +324,14 @@ def generate_ai_recommendation(
         }
 
         user_prompt = (
-            f"Operational Data and Simulation Outcomes:\n"
+            f"AUTHORITATIVE OPERATIONAL DATA AND DETERMINISTIC SIMULATION OUTCOMES:\n"
             f"{json.dumps(payload, indent=2)}\n\n"
-            f"Reason over these operational facts and return your recommendation in structured JSON."
+            f"CRITICAL GROUNDING INSTRUCTIONS:\n"
+            f"- All numbers in the JSON above are pre-calculated by the deterministic simulation engine and are 100% authoritative.\n"
+            f"- NEVER recalculate, modify, estimate, or invent numerical values.\n"
+            f"- In your 'reason' field, refer to scenarios using their exact metrics (net_flow_per_min, time_to_capacity_minutes, projected_occupancy_percent, projected_queue) exactly as provided above.\n"
+            f"- 'eta_minutes' must be set to the authoritative operational time_to_capacity_minutes ({risk_eval.time_to_capacity_minutes if risk_eval.time_to_capacity_minutes is not None else 999.0}).\n"
+            f"- Return your structured recommendation in the required JSON format."
         )
 
         config = types.GenerateContentConfig(
@@ -330,14 +357,64 @@ def generate_ai_recommendation(
 
                     raw_json = parse_and_validate_gemini_json(response.text)
 
+                    # Validation Safeguard: verify numerical fields safely without float(None) TypeError
+                    raw_eta = raw_json.get("eta_minutes")
+                    if raw_eta is None or isinstance(raw_eta, bool):
+                        raise ValueError(
+                            f"Missing or null eta_minutes in Gemini response: {raw_eta!r}"
+                        )
+                    try:
+                        returned_eta = float(raw_eta)
+                        if math.isnan(returned_eta):
+                            raise ValueError("eta_minutes in Gemini response is NaN")
+                    except (ValueError, TypeError):
+                        raise ValueError(
+                            f"Non-numeric eta_minutes in Gemini response: {raw_eta!r}"
+                        )
+
+                    raw_conf = raw_json.get("confidence")
+                    if raw_conf is None or isinstance(raw_conf, bool):
+                        raise ValueError(
+                            f"Missing or null confidence in Gemini response: {raw_conf!r}"
+                        )
+                    try:
+                        confidence = float(raw_conf)
+                        if math.isnan(confidence) or confidence < 0.0 or confidence > 1.0:
+                            raise ValueError(
+                                f"Confidence {confidence} out of range [0.0, 1.0]"
+                            )
+                    except (ValueError, TypeError):
+                        raise ValueError(
+                            f"Non-numeric confidence in Gemini response: {raw_conf!r}"
+                        )
+
+                    if risk_eval.time_to_capacity_minutes is not None:
+                        try:
+                            expected_eta = round(float(risk_eval.time_to_capacity_minutes), 2)
+                        except (ValueError, TypeError):
+                            expected_eta = None
+
+                        if expected_eta is not None:
+                            # Preserve the existing 0.1 minute tolerance
+                            if abs(returned_eta - expected_eta) > 0.1:
+                                raise ValueError(
+                                    f"Conflicting eta_minutes: model returned {returned_eta} but authoritative calculation is {expected_eta}"
+                                )
+                    else:
+                        # Authoritative net flow <= 0, time to capacity is infinite / unavailable
+                        if returned_eta < 60.0:
+                            raise ValueError(
+                                f"Conflicting eta_minutes: zone net flow <= 0 (infinite TTC), but model returned {returned_eta}"
+                            )
+
                     # Successful structured reasoning
                     return AiRecommendation(
-                        risk=str(raw_json["risk"]),
-                        eta_minutes=float(raw_json["eta_minutes"]),
-                        recommended_action=str(raw_json["recommended_action"]),
-                        reason=str(raw_json["reason"]),
-                        alternatives_considered=[str(a) for a in raw_json["alternatives_considered"]],
-                        confidence=float(raw_json["confidence"]),
+                        risk=str(raw_json.get("risk") or ""),
+                        eta_minutes=returned_eta,
+                        recommended_action=str(raw_json.get("recommended_action") or ""),
+                        reason=str(raw_json.get("reason") or ""),
+                        alternatives_considered=[str(a) for a in raw_json.get("alternatives_considered", [])],
+                        confidence=confidence,
                         is_fallback=False,
                         fallback_notice=None,
                         model_used=model_name,
@@ -346,16 +423,16 @@ def generate_ai_recommendation(
                 except Exception as exc:
                     safe_err = sanitize_error_message(str(exc), api_key)
 
-                    # 1. Non-transient errors (400, 401, 403, malformed output schema)
-                    if is_non_transient_error(exc) or isinstance(exc, (json.JSONDecodeError, ValueError)):
+                    # 1. Non-transient errors (400, 401, 403, malformed output schema, numerical validation failure)
+                    if is_non_transient_error(exc) or isinstance(exc, (json.JSONDecodeError, ValueError, TypeError)):
                         logger.warning(
-                            f"Non-transient error from Gemini on {model_name}: {type(exc).__name__} - {safe_err}. "
+                            f"Non-transient error or validation failure from Gemini on {model_name}: {type(exc).__name__} - {safe_err}. "
                             "Aborting model chain to avoid wasted retries."
                         )
                         return get_deterministic_fallback_recommendation(
                             risk_eval,
                             comparison,
-                            fallback_reason=f"Gemini API error ({type(exc).__name__}). Deterministic Safety Fallback Engine active.",
+                            fallback_reason=f"Gemini API error ({type(exc).__name__}: {safe_err}). Deterministic Safety Fallback Engine active.",
                         )
 
                     # 2. Transient errors (503 / UNAVAILABLE / high demand)

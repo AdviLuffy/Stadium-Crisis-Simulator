@@ -207,6 +207,148 @@ def test_api_key_not_exposed_in_logs_or_fallback():
             print("  [PASS] API key strictly redacted from all error messages and fallback notices")
 
 
+def test_gemini_grounded_in_scenario_values():
+    print("Testing 7: Gemini Response Strictly Grounded in Simulation Values...")
+    risk_eval, comp = get_test_fixtures()
+
+    grounded_json = """{
+      "risk": "CRITICAL bottleneck at Gate C with 1.78 min time to capacity",
+      "eta_minutes": 1.78,
+      "recommended_action": "Scenario C: Open Gate D + Dispatch 4 Shuttles",
+      "reason": "Authoritative simulation confirms Scenario C reverses net flow to -500/min, avoids capacity breach, and reduces projected queue to 5200.",
+      "alternatives_considered": [
+        "Scenario A: Dispatch 4 Shuttles (net flow +300/min, 5.33 min TTC)",
+        "Scenario B: Open Gate D (net flow +100/min, 16.0 min TTC)"
+      ],
+      "confidence": 0.98
+    }"""
+
+    mock_resp = MagicMock()
+    mock_resp.text = grounded_json
+
+    with patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key_123"}):
+        with patch("google.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
+            mock_client.models.generate_content.return_value = mock_resp
+
+            rec = generate_ai_recommendation(risk_eval, comp)
+
+            assert rec.is_fallback is False, "Expected live grounded reasoning to be accepted"
+            assert rec.eta_minutes == 1.78, "Expected eta_minutes to match authoritative value"
+            assert "-500/min" in rec.reason
+            assert "5200" in rec.reason
+            print("  [PASS] Grounded reasoning strictly matching authoritative simulation metrics accepted")
+
+
+def test_gemini_hallucinated_numbers_triggers_fallback():
+    print("Testing 8: Hallucinated Numerical Value Triggers Fallback Safeguard...")
+    risk_eval, comp = get_test_fixtures()
+
+    # Model hallucinates conflicting eta_minutes (e.g. 22.78 min instead of authoritative 1.78 min)
+    hallucinated_json = """{
+      "risk": "Mild congestion at Gate C",
+      "eta_minutes": 22.78,
+      "recommended_action": "Scenario B: Open Gate D",
+      "reason": "Gate D clears 800 people and net flow is -750/min with 22.78% occupancy.",
+      "alternatives_considered": ["Scenario A", "Scenario C"],
+      "confidence": 0.85
+    }"""
+
+    mock_resp = MagicMock()
+    mock_resp.text = hallucinated_json
+
+    with patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key_123"}):
+        with patch("google.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
+            mock_client.models.generate_content.return_value = mock_resp
+
+            rec = generate_ai_recommendation(risk_eval, comp)
+
+            assert rec.is_fallback is True, "Expected hallucinated numbers to trigger deterministic fallback"
+            assert rec.model_used is None
+            assert "Conflicting eta_minutes" in (rec.fallback_notice or "")
+            print(f"  [PASS] Hallucinated numbers rejected by safeguard; cleanly triggered fallback: '{rec.fallback_notice}'")
+
+
+def test_gemini_null_eta_minutes_regression():
+    print("Testing 9: Regression - Gemini returns null eta_minutes (no TypeError: float() on NoneType)...")
+    risk_eval, comp = get_test_fixtures()
+
+    null_eta_json = """{
+      "risk": "Moderate crowd at Gate C",
+      "eta_minutes": null,
+      "recommended_action": "Scenario B: Open Gate D",
+      "reason": "Gate D provides extra egress.",
+      "alternatives_considered": ["Scenario A"],
+      "confidence": 0.85
+    }"""
+
+    mock_resp = MagicMock()
+    mock_resp.text = null_eta_json
+
+    with patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key_123"}):
+        with patch("google.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
+            mock_client.models.generate_content.return_value = mock_resp
+
+            # Must NOT raise TypeError: float() argument must be a string or a real number, not 'NoneType'
+            rec = generate_ai_recommendation(risk_eval, comp)
+
+            assert rec.is_fallback is True, "Expected null eta_minutes to be rejected and fall back safely"
+            assert rec.model_used is None
+            assert "eta_minutes" in (rec.fallback_notice or "")
+            print(f"  [PASS] Null eta_minutes cleanly rejected without TypeError: '{rec.fallback_notice}'")
+
+
+def test_authoritative_none_ttc_handled_safely():
+    print("Testing 10: Authoritative TTC is None (negative net flow) handled safely without float(None)...")
+    # Zone with inflow < outflow, so net flow <= 0 and time_to_capacity_minutes is None
+    record = StadiumZoneRecord(
+        timestamp="19:05:00",
+        zone="Gate A",
+        capacity=10000,
+        current_crowd=5000,
+        inflow_per_min=500,
+        outflow_per_min=1000,
+        queue_size=200,
+        transport_capacity=1000,
+        next_transport_minutes=10.0,
+        available_shuttles=4,
+        gate_d_available=True,
+    )
+    risk_eval = evaluate_zone_risk(record)
+    assert risk_eval.time_to_capacity_minutes is None, "Fixture check: TTC must be None for negative net flow"
+    comp = generate_standard_comparison(record)
+
+    valid_json = """{
+      "risk": "Low risk at Gate A",
+      "eta_minutes": 999.0,
+      "recommended_action": "Maintain normal operations",
+      "reason": "Outflow exceeds inflow, queue is clearing.",
+      "alternatives_considered": ["Scenario A"],
+      "confidence": 0.95
+    }"""
+
+    mock_resp = MagicMock()
+    mock_resp.text = valid_json
+
+    with patch.dict(os.environ, {"GEMINI_API_KEY": "dummy_key_123"}):
+        with patch("google.genai.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
+            mock_client.models.generate_content.return_value = mock_resp
+
+            # Must NOT raise TypeError when evaluating None authoritative TTC
+            rec = generate_ai_recommendation(risk_eval, comp)
+
+            assert rec.is_fallback is False, "Expected valid response accepted when authoritative TTC is None"
+            assert rec.eta_minutes == 999.0
+            print("  [PASS] Authoritative TTC=None evaluated safely without calling float(None)")
+
+
 if __name__ == "__main__":
     test_successful_gemini_response()
     test_transient_503_fallback_chain_success()
@@ -214,4 +356,9 @@ if __name__ == "__main__":
     test_malformed_json_fallback()
     test_non_transient_error_no_retries()
     test_api_key_not_exposed_in_logs_or_fallback()
-    print("\nALL 6 AI RESILIENCE TESTS PASSED SUCCESSFULLY!")
+    test_gemini_grounded_in_scenario_values()
+    test_gemini_hallucinated_numbers_triggers_fallback()
+    test_gemini_null_eta_minutes_regression()
+    test_authoritative_none_ttc_handled_safely()
+    print("\nALL 10 AI RESILIENCE & GROUNDING TESTS PASSED SUCCESSFULLY!")
+
