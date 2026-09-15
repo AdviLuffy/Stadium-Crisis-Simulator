@@ -40,7 +40,7 @@ export function renderDashboard(container, state, onSelectZone, onNavigate) {
             ${selectedEval.zone} — Rapid Crowd Surge Detected
           </h2>
           <p>
-            Net influx is <strong>+${selectedEval.net_flow_per_min:,} people/min</strong> with ${selectedRecord.queue_size:,} in exterior queues.
+            Net influx is <strong>+${selectedEval.net_flow_per_min.toLocaleString()} people/min</strong> with ${selectedRecord.queue_size.toLocaleString()} in exterior queues.
             Action required before zone capacity breach.
           </p>
         </div>
@@ -73,25 +73,25 @@ export function renderDashboard(container, state, onSelectZone, onNavigate) {
       <div class="metrics-row">
         <div class="metric-box">
           <div class="metric-label">Current Crowd</div>
-          <div class="metric-val">${selectedRecord.current_crowd:,}</div>
-          <div class="metric-sub">of ${selectedRecord.capacity:,} max</div>
+          <div class="metric-val">${selectedRecord.current_crowd.toLocaleString()}</div>
+          <div class="metric-sub">of ${selectedRecord.capacity.toLocaleString()} max</div>
         </div>
         <div class="metric-box">
           <div class="metric-label">Net Influx</div>
           <div class="metric-val ${selectedEval.net_flow_per_min > 0 ? 'text-critical' : 'text-low'}">
-            ${selectedEval.net_flow_per_min > 0 ? '+' : ''}${selectedEval.net_flow_per_min:,}
+            ${selectedEval.net_flow_per_min > 0 ? '+' : ''}${selectedEval.net_flow_per_min.toLocaleString()}
           </div>
           <div class="metric-sub">people / minute</div>
         </div>
         <div class="metric-box">
           <div class="metric-label">Remaining Cap</div>
-          <div class="metric-val">${selectedEval.remaining_capacity:,}</div>
+          <div class="metric-val">${selectedEval.remaining_capacity.toLocaleString()}</div>
           <div class="metric-sub">available seats</div>
         </div>
         <div class="metric-box">
           <div class="metric-label">Exterior Queue</div>
           <div class="metric-val ${selectedRecord.queue_size > 2000 ? 'text-high' : ''}">
-            ${selectedRecord.queue_size:,}
+            ${selectedRecord.queue_size.toLocaleString()}
           </div>
           <div class="metric-sub">waiting at perimeter</div>
         </div>
@@ -111,13 +111,13 @@ export function renderDashboard(container, state, onSelectZone, onNavigate) {
         <div class="stat-item">
           <div class="stat-label">Inflow vs Outflow Rate</div>
           <div style="font-size: 0.85rem; font-weight: 600; color: #fff; margin-top: 0.2rem;">
-            ↓ ${selectedRecord.inflow_per_min:,}/m &nbsp;|&nbsp; ↑ ${selectedRecord.outflow_per_min:,}/m
+            ↓ ${selectedRecord.inflow_per_min.toLocaleString()}/m &nbsp;|&nbsp; ↑ ${selectedRecord.outflow_per_min.toLocaleString()}/m
           </div>
         </div>
         <div class="stat-item">
           <div class="stat-label">Next Transit Arrival</div>
           <div style="font-size: 0.85rem; font-weight: 600; color: #fff; margin-top: 0.2rem;">
-            ⏱ ${selectedRecord.next_transport_minutes} min (Cap: ${selectedRecord.transport_capacity:,})
+            ⏱ ${selectedRecord.next_transport_minutes} min (Cap: ${selectedRecord.transport_capacity.toLocaleString()})
           </div>
         </div>
       </div>
@@ -240,7 +240,7 @@ export function renderDashboard(container, state, onSelectZone, onNavigate) {
           <div class="stat-item">
             <div class="stat-label">Crowd / Cap</div>
             <div style="font-size: 0.85rem; font-weight: 600; color: #fff; margin-top: 0.2rem;">
-              ${z.raw_record.current_crowd:,} / ${z.raw_record.capacity:,}
+              ${z.raw_record.current_crowd.toLocaleString()} / ${z.raw_record.capacity.toLocaleString()}
             </div>
           </div>
           <div class="stat-item">
@@ -252,7 +252,7 @@ export function renderDashboard(container, state, onSelectZone, onNavigate) {
         </div>
 
         <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.725rem; color: var(--text-muted); margin-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.04); padding-top: 0.4rem;">
-          <span>Queue: ${z.raw_record.queue_size:,}</span>
+          <span>Queue: ${z.raw_record.queue_size.toLocaleString()}</span>
           <span style="color: #38bdf8; font-weight: 600;">Click to Inspect →</span>
         </div>
       </div>
@@ -276,7 +276,7 @@ export function renderDashboard(container, state, onSelectZone, onNavigate) {
           <span>🏟️</span> Multi-Zone Stadium Operational Overview
         </div>
         <div style="font-size: 0.8rem; color: var(--text-secondary);">
-          Total Stadium Crowd: <strong>${overview.total_crowd:,}</strong> / ${overview.total_capacity:,} (${overview.overall_occupancy_percent}%)
+          Total Stadium Crowd: <strong>${overview.total_crowd.toLocaleString()}</strong> / ${overview.total_capacity.toLocaleString()} (${overview.overall_occupancy_percent}%)
         </div>
       </div>
       <div class="zone-grid">

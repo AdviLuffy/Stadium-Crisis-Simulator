@@ -58,12 +58,12 @@ export function renderCrisisSimulator(
         <div class="scenario-metrics-list">
           <div class="scen-metric-item">
             <span style="color: var(--text-secondary);">Projected Influx Rate</span>
-            <span class="val ${netFlowClass}">${scen.projected_net_flow > 0 ? '+' : ''}${scen.projected_net_flow:,} /min</span>
+            <span class="val ${netFlowClass}">${scen.projected_net_flow > 0 ? '+' : ''}${scen.projected_net_flow.toLocaleString()} /min</span>
           </div>
           <div class="scen-metric-item">
             <span style="color: var(--text-secondary);">Inflow vs Outflow</span>
             <span class="val" style="font-size: 0.75rem; color: var(--text-muted);">
-              ↓ ${scen.projected_inflow:,}/m | ↑ ${scen.projected_outflow:,}/m
+              ↓ ${scen.projected_inflow.toLocaleString()}/m | ↑ ${scen.projected_outflow.toLocaleString()}/m
             </span>
           </div>
           <div class="scen-metric-item">
@@ -78,7 +78,7 @@ export function renderCrisisSimulator(
           </div>
           <div class="scen-metric-item">
             <span style="color: var(--text-secondary);">Exterior Queue Drainage</span>
-            <span class="val">${scen.projected_queue:,}</span>
+            <span class="val">${scen.projected_queue.toLocaleString()}</span>
           </div>
         </div>
 
@@ -202,7 +202,7 @@ export function renderCrisisSimulator(
           </div>
           <div>• Available Shuttles: <strong>${record.available_shuttles}</strong></div>
           <div>• Gate D Auxiliary Status: <strong>${record.gate_d_available ? 'Available' : 'Unavailable'}</strong></div>
-          <div>• Max Zone Capacity: <strong>${record.capacity:,}</strong></div>
+          <div>• Max Zone Capacity: <strong>${record.capacity.toLocaleString()}</strong></div>
         </div>
       </div>
 

@@ -22,12 +22,12 @@ export function renderDataUpload(
     <tr>
       <td class="font-mono">${r.timestamp}</td>
       <td><strong>${r.zone}</strong></td>
-      <td class="font-mono">${r.capacity:,}</td>
-      <td class="font-mono">${r.current_crowd:,}</td>
-      <td class="font-mono text-critical">+${r.inflow_per_min:,}</td>
-      <td class="font-mono text-low">-${r.outflow_per_min:,}</td>
-      <td class="font-mono">${r.queue_size:,}</td>
-      <td class="font-mono">${r.transport_capacity:,}</td>
+      <td class="font-mono">${r.capacity.toLocaleString()}</td>
+      <td class="font-mono">${r.current_crowd.toLocaleString()}</td>
+      <td class="font-mono text-critical">+${r.inflow_per_min.toLocaleString()}</td>
+      <td class="font-mono text-low">-${r.outflow_per_min.toLocaleString()}</td>
+      <td class="font-mono">${r.queue_size.toLocaleString()}</td>
+      <td class="font-mono">${r.transport_capacity.toLocaleString()}</td>
       <td class="font-mono">${r.next_transport_minutes}m</td>
       <td class="font-mono">${r.available_shuttles}</td>
       <td><span class="badge ${r.gate_d_available ? 'low' : 'critical'}">${r.gate_d_available ? 'YES' : 'NO'}</span></td>
